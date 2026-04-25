@@ -16,6 +16,7 @@ usage() {
 Usage: run_profile_update.sh [options]
        run_profile_update.sh set [github=USER] [repo=PATH] [auth=ssh|https_pat] [name=NAME] [email=EMAIL]
        run_profile_update.sh config
+       run_profile_update.sh heatmap [options]
 
 Generate vibe heatmap, update profile README marker block, then commit/push.
 
@@ -28,7 +29,9 @@ Options:
   --git-author-email EMAIL Git author email for non-interactive setup
   --github-token-env NAME  Env var containing PAT for https_pat setup
   --profile-repo PATH      Profile repository path (default: saved config or auto-detect)
-  --source MODE            claude|codex|combined (default: combined)
+  --source MODE            combined or a detected tool id (default: combined)
+  --extra-history TOOL=GLOB Add generic JSON/JSONL history source for a tool
+  --recent-days DAYS       Days used by the recent tool usage card (default: 7)
   --intensity-mode MODE    minutes|sessions|events (default: sessions)
   --year YYYY              Calendar year (default: current year)
   --tz NAME                Timezone name, e.g. Asia/Hong_Kong
@@ -44,6 +47,7 @@ Environment:
 Commands:
   set, setup               Alias for --setup; supports key=value parameters
   config, show-config      Alias for --show-config
+  heatmap, publish         Generate/update README, commit, and push
 
 Set parameters:
   github=USER, username=USER
@@ -52,6 +56,14 @@ Set parameters:
   name=NAME
   email=EMAIL
   token_env=NAME           Default: VIBE_GITHUB_TOKEN, then GITHUB_TOKEN
+
+Heatmap key=value parameters:
+  source=TOOL              Same as --source TOOL
+  history=PATH_OR_GLOB     Add history for the selected source
+  extra_history=TOOL=GLOB  Same as --extra-history TOOL=GLOB
+  year=YYYY
+  intensity=minutes|sessions|events
+  recent_days=DAYS
 EOF
 }
 
@@ -521,7 +533,7 @@ run_setup() {
 
   log "Setup complete."
   log "Saved config: $CONFIG_FILE"
-  log "Next run: /vibe"
+  log "Next run: /vibe heatmap"
 }
 
 apply_setup_assignment() {
@@ -558,6 +570,41 @@ apply_setup_assignment() {
   esac
 }
 
+apply_heatmap_assignment() {
+  local raw="$1"
+  local key="${raw%%=*}"
+  local value="${raw#*=}"
+
+  [[ "$raw" == *=* ]] || die "Expected key=value heatmap parameter, got: $raw"
+
+  case "$key" in
+    source)
+      SOURCE="$value"
+      ;;
+    history|history_glob|history-glob)
+      HEATMAP_HISTORY_GLOB="$value"
+      ;;
+    extra_history|extra-history)
+      EXTRA_HISTORY_ARGS+=("$value")
+      ;;
+    year)
+      YEAR="$value"
+      ;;
+    intensity|intensity_mode|intensity-mode)
+      INTENSITY_MODE="$value"
+      ;;
+    recent_days|recent-days)
+      RECENT_DAYS="$value"
+      ;;
+    tz)
+      TZ_NAME="$value"
+      ;;
+    *)
+      die "Unknown heatmap parameter: $key"
+      ;;
+  esac
+}
+
 load_saved_config
 
 PROFILE_REPO="${VIBE_PROFILE_REPO:-${SAVED_PROFILE_REPO:-}}"
@@ -565,8 +612,10 @@ SOURCE="combined"
 INTENSITY_MODE="sessions"
 YEAR="$(date +%Y)"
 TZ_NAME=""
+RECENT_DAYS="7"
 NO_PUSH=0
 NO_COMMIT=0
+PUBLISH_MODE=0
 SETUP_MODE=0
 SHOW_CONFIG=0
 SETUP_NONINTERACTIVE=0
@@ -576,6 +625,8 @@ SETUP_PROFILE_REPO=""
 SETUP_GIT_AUTHOR_NAME=""
 SETUP_GIT_AUTHOR_EMAIL=""
 SETUP_GITHUB_TOKEN_ENV=""
+HEATMAP_HISTORY_GLOB=""
+EXTRA_HISTORY_ARGS=()
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -585,6 +636,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     config|show-config)
       SHOW_CONFIG=1
+      shift
+      ;;
+    heatmap|publish|generate)
+      PUBLISH_MODE=1
       shift
       ;;
     --setup)
@@ -637,6 +692,14 @@ while [[ "$#" -gt 0 ]]; do
       SOURCE="${2:-}"
       shift 2
       ;;
+    --extra-history)
+      EXTRA_HISTORY_ARGS+=("${2:-}")
+      shift 2
+      ;;
+    --recent-days)
+      RECENT_DAYS="${2:-}"
+      shift 2
+      ;;
     --intensity-mode)
       INTENSITY_MODE="${2:-}"
       shift 2
@@ -666,7 +729,9 @@ while [[ "$#" -gt 0 ]]; do
         apply_setup_assignment "$1"
         shift
       else
-        die "Unexpected key=value parameter outside setup mode: $1"
+        PUBLISH_MODE=1
+        apply_heatmap_assignment "$1"
+        shift
       fi
       ;;
     *)
@@ -686,7 +751,7 @@ if [[ "$SETUP_MODE" -eq 1 ]]; then
 fi
 
 case "$SOURCE" in
-  claude|codex|combined) ;;
+  claude|codex|combined|codefuse|codefuse-codex|codefuse-claude|codebuddy|opencode|antigravity|copilot|cursor|windsurf|continue|aider|gemini-cli|qwen-code) ;;
   *) die "Invalid --source: $SOURCE" ;;
 esac
 
@@ -695,12 +760,16 @@ case "$INTENSITY_MODE" in
   *) die "Invalid --intensity-mode: $INTENSITY_MODE" ;;
 esac
 
+if [[ -n "$HEATMAP_HISTORY_GLOB" ]]; then
+  EXTRA_HISTORY_ARGS+=("${SOURCE}=${HEATMAP_HISTORY_GLOB}")
+fi
+
 if [[ -z "$PROFILE_REPO" ]]; then
   PROFILE_REPO="$(auto_detect_profile_repo || true)"
 fi
 
 if [[ -z "$PROFILE_REPO" ]]; then
-  die "Profile repo is not configured. Run /vibe set, or run: bash ~/.claude/skills/claude-vibe-heatmap/scripts/run_profile_update.sh --setup"
+  die "Profile repo is not configured. Run /vibe set github=<username> first, then run /vibe heatmap."
 fi
 
 [[ -d "$PROFILE_REPO/.git" ]] || die "Not a git repository: $PROFILE_REPO"
@@ -724,6 +793,8 @@ ASSETS_DIR="$PROFILE_REPO/assets"
 mkdir -p "$ASSETS_DIR"
 
 SVG_PATH="$ASSETS_DIR/vibe-heatmap.svg"
+TOOLS_SVG_PATH="$ASSETS_DIR/vibe-tools.svg"
+RECENT_TOOLS_SVG_PATH="$ASSETS_DIR/vibe-tools-recent.svg"
 JSON_PATH="$ASSETS_DIR/vibe-heatmap.json"
 
 cmd=(
@@ -732,10 +803,19 @@ cmd=(
   --year "$YEAR"
   --intensity-mode "$INTENSITY_MODE"
   --output-svg "$SVG_PATH"
+  --output-tools-svg "$TOOLS_SVG_PATH"
+  --output-recent-tools-svg "$RECENT_TOOLS_SVG_PATH"
   --output-json "$JSON_PATH"
   --readme "$README_PATH"
   --svg-url "./assets/vibe-heatmap.svg"
+  --tools-svg-url "./assets/vibe-tools.svg"
+  --recent-tools-svg-url "./assets/vibe-tools-recent.svg"
+  --recent-days "$RECENT_DAYS"
 )
+
+for extra_history in "${EXTRA_HISTORY_ARGS[@]}"; do
+  cmd+=(--extra-history "$extra_history")
+done
 
 if [[ -n "$TZ_NAME" ]]; then
   cmd+=(--tz "$TZ_NAME")
@@ -751,12 +831,12 @@ fi
 
 cd "$PROFILE_REPO"
 
-if [[ -z "$(git status --porcelain -- README.md assets/vibe-heatmap.svg assets/vibe-heatmap.json)" ]]; then
+if [[ -z "$(git status --porcelain -- README.md assets/vibe-heatmap.svg assets/vibe-tools.svg assets/vibe-tools-recent.svg assets/vibe-heatmap.json)" ]]; then
   log "No file changes detected. Nothing to commit."
   exit 0
 fi
 
-git add README.md assets/vibe-heatmap.svg assets/vibe-heatmap.json
+git add README.md assets/vibe-heatmap.svg assets/vibe-tools.svg assets/vibe-tools-recent.svg assets/vibe-heatmap.json
 
 git commit -m "chore: update vibe heatmap (${YEAR}, ${SOURCE}, ${INTENSITY_MODE})"
 
