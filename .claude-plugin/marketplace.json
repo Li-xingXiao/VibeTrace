@@ -1,0 +1,34 @@
+{
+  "name": "vibetrace",
+  "owner": {
+    "name": "Li-xingXiao"
+  },
+  "metadata": {
+    "description": "Generate and publish GitHub profile AI coding heatmaps with WakaTime-style tool usage cards. Supports Claude, Codex, CodeFuse, OpenCode, CodeBuddy, Copilot, Cursor, Windsurf, Continue, Aider, Gemini CLI, Qwen Code, and custom JSON/JSONL sources.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "vibetrace",
+      "description": "Set up a GitHub profile repo, generate AI coding heatmaps, add tool usage cards, preserve existing README content, commit, and push through /vibe.",
+      "source": "./",
+      "strict": true,
+      "skills": [
+        "./skills/vibe",
+        "./skills/claude-vibe-heatmap",
+        "./skills/codex-vibe-heatmap",
+        "./skills/codefuse-vibe-heatmap",
+        "./skills/opencode-vibe-heatmap",
+        "./skills/codebuddy-vibe-heatmap",
+        "./skills/antigravity-vibe-heatmap",
+        "./skills/copilot-vibe-heatmap",
+        "./skills/cursor-vibe-heatmap",
+        "./skills/windsurf-vibe-heatmap",
+        "./skills/continue-vibe-heatmap",
+        "./skills/aider-vibe-heatmap",
+        "./skills/gemini-cli-vibe-heatmap",
+        "./skills/qwen-code-vibe-heatmap"
+      ]
+    }
+  ]
+}

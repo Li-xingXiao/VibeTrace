@@ -1,0 +1,9 @@
+{
+  "name": "vibetrace",
+  "description": "Publish a GitHub profile AI coding heatmap with WakaTime-style usage cards for Claude, Codex, CodeFuse, OpenCode, CodeBuddy, Copilot, Cursor, Windsurf, Aider, Gemini CLI, Qwen Code, and other vibe coding tools.",
+  "version": "0.1.0",
+  "author": {
+    "name": "xiaolixing"
+  },
+  "license": "MIT"
+}
