@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Vibe Heatmap"
+  short_description: "Track Claude coding cadence in a GitHub-style heatmap."
+  default_prompt: "Use $claude-vibe-heatmap to generate my Claude coding vibe heatmap from local history."

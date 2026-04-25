@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vibe"
+  short_description: "Set up and publish a GitHub profile coding heatmap."
+  default_prompt: "Use $vibe to set up my GitHub account association or update my profile heatmap."
