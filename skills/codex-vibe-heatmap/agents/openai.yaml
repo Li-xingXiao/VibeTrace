@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Vibe Heatmap"
-  short_description: "Track Codex coding cadence in a GitHub-style heatmap."
-  default_prompt: "Use $codex-vibe-heatmap to generate my Codex coding vibe heatmap from local history."
+  short_description: "Publish Codex coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $codex-vibe-heatmap to update my profile heatmap for Codex."

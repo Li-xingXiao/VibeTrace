@@ -1,0 +1,4 @@
+interface:
+  display_name: "Antigravity Vibe Heatmap"
+  short_description: "Publish Antigravity coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $antigravity-vibe-heatmap to update my profile heatmap for Antigravity."

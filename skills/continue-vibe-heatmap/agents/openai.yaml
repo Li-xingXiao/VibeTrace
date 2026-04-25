@@ -1,0 +1,4 @@
+interface:
+  display_name: "Continue Vibe Heatmap"
+  short_description: "Publish Continue coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $continue-vibe-heatmap to update my profile heatmap for Continue."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Windsurf Vibe Heatmap"
+  short_description: "Publish Windsurf coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $windsurf-vibe-heatmap to update my profile heatmap for Windsurf."

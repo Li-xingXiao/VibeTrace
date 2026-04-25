@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeFuse Vibe Heatmap"
+  short_description: "Publish CodeFuse coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $codefuse-vibe-heatmap to update my profile heatmap for CodeFuse."

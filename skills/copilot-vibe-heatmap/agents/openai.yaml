@@ -1,0 +1,4 @@
+interface:
+  display_name: "Copilot Vibe Heatmap"
+  short_description: "Publish GitHub Copilot coding cadence to a profile heatmap."
+  default_prompt: "Use $copilot-vibe-heatmap to update my profile heatmap for GitHub Copilot."

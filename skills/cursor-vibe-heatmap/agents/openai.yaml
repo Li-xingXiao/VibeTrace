@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cursor Vibe Heatmap"
+  short_description: "Publish Cursor coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $cursor-vibe-heatmap to update my profile heatmap for Cursor."

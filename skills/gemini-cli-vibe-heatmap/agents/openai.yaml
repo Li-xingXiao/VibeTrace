@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gemini CLI Vibe Heatmap"
+  short_description: "Publish Gemini CLI coding cadence to a profile heatmap."
+  default_prompt: "Use $gemini-cli-vibe-heatmap to update my profile heatmap for Gemini CLI."

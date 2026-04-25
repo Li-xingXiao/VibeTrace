@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aider Vibe Heatmap"
+  short_description: "Publish Aider coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $aider-vibe-heatmap to update my profile heatmap for Aider."

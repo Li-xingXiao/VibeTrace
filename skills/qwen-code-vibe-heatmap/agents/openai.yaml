@@ -1,0 +1,4 @@
+interface:
+  display_name: "Qwen Code Vibe Heatmap"
+  short_description: "Publish Qwen Code coding cadence to a GitHub profile heatmap."
+  default_prompt: "Use $qwen-code-vibe-heatmap to update my profile heatmap for Qwen Code."
