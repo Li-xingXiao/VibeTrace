@@ -17,6 +17,7 @@ Usage: run_profile_update.sh [options]
        run_profile_update.sh set [github=USER] [repo=PATH] [auth=ssh|https_pat] [name=NAME] [email=EMAIL]
        run_profile_update.sh config
        run_profile_update.sh heatmap [options]
+       run_profile_update.sh auto [enable|disable|status]
 
 Generate vibe heatmap, update profile README marker block, then commit/push.
 
@@ -48,6 +49,14 @@ Commands:
   set, setup               Alias for --setup; supports key=value parameters
   config, show-config      Alias for --show-config
   heatmap, publish         Generate/update README, commit, and push
+  auto [enable|disable|status]  Manage scheduled auto-publish via system crontab
+  auto enable              Enable daily auto-publish (default: 9am)
+  auto enable "<cron>"     Enable with custom cron schedule
+  auto enable daily        Preset: every day at 9am
+  auto enable weekly       Preset: every Monday at 9am
+  auto enable 6h           Preset: every 6 hours
+  auto disable             Remove auto-publish cron entry
+  auto status              Show current auto-publish configuration
 
 Set parameters:
   github=USER, username=USER
@@ -461,6 +470,79 @@ auto_detect_profile_repo() {
   return 1
 }
 
+CRON_TAG="# vibetrace-auto"
+
+resolve_auto_schedule() {
+  local input="$1"
+  case "$input" in
+    daily)       printf '0 9 * * *\n' ;;
+    weekly)      printf '0 9 * * 1\n' ;;
+    6h)          printf '0 */6 * * *\n' ;;
+    12h)         printf '0 */12 * * *\n' ;;
+    *)           printf '%s\n' "$input" ;;
+  esac
+}
+
+auto_cron_line() {
+  local schedule="$1"
+  local script_path
+  script_path="$(cd "$SCRIPT_DIR" && pwd)/run_profile_update.sh"
+  printf '%s bash %s heatmap %s\n' "$schedule" "$script_path" "$CRON_TAG"
+}
+
+auto_enable() {
+  local raw_schedule="${1:-daily}"
+  local schedule
+  schedule="$(resolve_auto_schedule "$raw_schedule")"
+
+  [[ -n "$SAVED_PROFILE_REPO" ]] || die "No profile configured. Run /vibe set github=<username> first."
+  [[ -d "$SAVED_PROFILE_REPO/.git" ]] || die "Profile repo not found at $SAVED_PROFILE_REPO. Run /vibe set github=<username> first."
+
+  local new_line
+  new_line="$(auto_cron_line "$schedule")"
+  ( crontab -l 2>/dev/null | grep -v "$CRON_TAG" ; printf '%s\n' "$new_line" ) | crontab -
+  log "Auto-publish enabled."
+  log "Schedule: $schedule"
+  log "Cron entry: $new_line"
+}
+
+auto_disable() {
+  if crontab -l 2>/dev/null | grep -q "$CRON_TAG"; then
+    crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab -
+    log "Auto-publish disabled. Cron entry removed."
+  else
+    log "No auto-publish cron entry found."
+  fi
+}
+
+auto_status() {
+  local entry
+  entry="$(crontab -l 2>/dev/null | grep "$CRON_TAG" || true)"
+  if [[ -n "$entry" ]]; then
+    log "Auto-publish is ENABLED"
+    log "Schedule: $entry"
+  else
+    log "Auto-publish is DISABLED (no cron entry found)"
+  fi
+
+  local hook_script="$SCRIPT_DIR/auto-update-check.sh"
+  if [[ -f "$hook_script" ]]; then
+    local last_file="$SCRIPT_DIR/../.last-auto-update"
+    if [[ -f "$last_file" ]]; then
+      local last_ts now elapsed hours
+      last_ts="$(cat "$last_file" 2>/dev/null || echo 0)"
+      now="$(date +%s)"
+      elapsed=$(( now - last_ts ))
+      hours=$(( elapsed / 3600 ))
+      log "Session-start hook: installed (last update ${hours}h ago)"
+    else
+      log "Session-start hook: installed (never triggered)"
+    fi
+  else
+    log "Session-start hook: not installed"
+  fi
+}
+
 run_setup() {
   local github_username="${SETUP_GITHUB_USERNAME:-${SAVED_GITHUB_USERNAME:-}}"
   local auth_mode="${SETUP_AUTH_MODE:-${SAVED_AUTH_MODE:-ssh}}"
@@ -618,6 +700,7 @@ NO_COMMIT=0
 PUBLISH_MODE=0
 SETUP_MODE=0
 SHOW_CONFIG=0
+AUTO_MODE=0
 SETUP_NONINTERACTIVE=0
 SETUP_GITHUB_USERNAME=""
 SETUP_AUTH_MODE=""
@@ -627,6 +710,7 @@ SETUP_GIT_AUTHOR_EMAIL=""
 SETUP_GITHUB_TOKEN_ENV=""
 HEATMAP_HISTORY_GLOB=""
 EXTRA_HISTORY_ARGS=()
+AUTO_ARGS=()
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -640,6 +724,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     heatmap|publish|generate)
       PUBLISH_MODE=1
+      shift
+      ;;
+    auto)
+      AUTO_MODE=1
       shift
       ;;
     --setup)
@@ -735,7 +823,12 @@ while [[ "$#" -gt 0 ]]; do
       fi
       ;;
     *)
-      die "Unknown option: $1"
+      if [[ "$AUTO_MODE" -eq 1 ]]; then
+        AUTO_ARGS+=("$1")
+        shift
+      else
+        die "Unknown option: $1"
+      fi
       ;;
   esac
 done
@@ -747,6 +840,25 @@ fi
 
 if [[ "$SETUP_MODE" -eq 1 ]]; then
   run_setup
+  exit 0
+fi
+
+if [[ "$AUTO_MODE" -eq 1 ]]; then
+  local_auto_sub="${AUTO_ARGS[0]:-status}"
+  case "$local_auto_sub" in
+    enable|setup)
+      auto_enable "${AUTO_ARGS[1]:-daily}"
+      ;;
+    disable|remove)
+      auto_disable
+      ;;
+    status|"")
+      auto_status
+      ;;
+    *)
+      auto_enable "$local_auto_sub"
+      ;;
+  esac
   exit 0
 fi
 
