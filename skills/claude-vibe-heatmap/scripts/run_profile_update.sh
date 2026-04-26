@@ -500,7 +500,7 @@ auto_enable() {
 
   local new_line
   new_line="$(auto_cron_line "$schedule")"
-  ( crontab -l 2>/dev/null | grep -v "$CRON_TAG" ; printf '%s\n' "$new_line" ) | crontab -
+  ( crontab -l 2>/dev/null | grep -v "$CRON_TAG" || true ; printf '%s\n' "$new_line" ) | crontab -
   log "Auto-publish enabled."
   log "Schedule: $schedule"
   log "Cron entry: $new_line"
@@ -508,7 +508,7 @@ auto_enable() {
 
 auto_disable() {
   if crontab -l 2>/dev/null | grep -q "$CRON_TAG"; then
-    crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab -
+    ( crontab -l 2>/dev/null | grep -v "$CRON_TAG" || true ) | crontab -
     log "Auto-publish disabled. Cron entry removed."
   else
     log "No auto-publish cron entry found."
@@ -598,8 +598,10 @@ run_setup() {
     remote_url="https://github.com/${github_username}/${github_username}.git"
   fi
 
-  ensure_github_profile_repo_exists "$github_username" "$remote_url" "$SETUP_GITHUB_TOKEN_ENV"
-  clone_profile_repo_if_needed "$profile_repo" "$remote_url"
+  if [[ ! -d "$profile_repo/.git" ]]; then
+    ensure_github_profile_repo_exists "$github_username" "$remote_url" "$SETUP_GITHUB_TOKEN_ENV"
+    clone_profile_repo_if_needed "$profile_repo" "$remote_url"
+  fi
   [[ -d "$profile_repo/.git" ]] || die "Not a git repository: $profile_repo"
 
   configure_remote "$profile_repo" "$remote_url"

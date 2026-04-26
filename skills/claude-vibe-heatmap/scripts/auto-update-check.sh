@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/../.vibe-profile.conf"
@@ -15,7 +15,11 @@ if [[ -f "$LAST_UPDATE_FILE" ]]; then
   [[ "$elapsed" -ge "$COOLDOWN" ]] || exit 0
 fi
 
-bash "$SCRIPT_DIR/run_profile_update.sh" heatmap 2>&1 | tail -5
+if bash "$SCRIPT_DIR/run_profile_update.sh" heatmap 2>&1 | tail -5; then
+  printf '[vibe] Auto-update complete.\n'
+else
+  printf '[vibe] Auto-update attempted (some steps may have failed).\n'
+fi
 
 date +%s > "$LAST_UPDATE_FILE"
-printf '[vibe] Auto-update complete.\n'
+exit 0
