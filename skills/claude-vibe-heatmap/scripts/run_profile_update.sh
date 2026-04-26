@@ -795,6 +795,9 @@ mkdir -p "$ASSETS_DIR"
 SVG_PATH="$ASSETS_DIR/vibe-heatmap.svg"
 TOOLS_SVG_PATH="$ASSETS_DIR/vibe-tools.svg"
 RECENT_TOOLS_SVG_PATH="$ASSETS_DIR/vibe-tools-recent.svg"
+TOKEN_SVG_PATH="$ASSETS_DIR/vibe-tokens.svg"
+SCORECARD_SVG_PATH="$ASSETS_DIR/vibe-scorecard.svg"
+BADGES_SVG_PATH="$ASSETS_DIR/vibe-badges.svg"
 JSON_PATH="$ASSETS_DIR/vibe-heatmap.json"
 
 cmd=(
@@ -805,11 +808,17 @@ cmd=(
   --output-svg "$SVG_PATH"
   --output-tools-svg "$TOOLS_SVG_PATH"
   --output-recent-tools-svg "$RECENT_TOOLS_SVG_PATH"
+  --output-token-svg "$TOKEN_SVG_PATH"
+  --output-scorecard-svg "$SCORECARD_SVG_PATH"
+  --output-badges-svg "$BADGES_SVG_PATH"
   --output-json "$JSON_PATH"
   --readme "$README_PATH"
   --svg-url "./assets/vibe-heatmap.svg"
   --tools-svg-url "./assets/vibe-tools.svg"
   --recent-tools-svg-url "./assets/vibe-tools-recent.svg"
+  --token-svg-url "./assets/vibe-tokens.svg"
+  --scorecard-svg-url "./assets/vibe-scorecard.svg"
+  --badges-svg-url "./assets/vibe-badges.svg"
   --recent-days "$RECENT_DAYS"
 )
 
@@ -831,12 +840,12 @@ fi
 
 cd "$PROFILE_REPO"
 
-if [[ -z "$(git status --porcelain -- README.md assets/vibe-heatmap.svg assets/vibe-tools.svg assets/vibe-tools-recent.svg assets/vibe-heatmap.json)" ]]; then
+if [[ -z "$(git status --porcelain -- README.md assets/vibe-heatmap.svg assets/vibe-tools.svg assets/vibe-tools-recent.svg assets/vibe-tokens.svg assets/vibe-scorecard.svg assets/vibe-badges.svg assets/vibe-heatmap.json)" ]]; then
   log "No file changes detected. Nothing to commit."
   exit 0
 fi
 
-git add README.md assets/vibe-heatmap.svg assets/vibe-tools.svg assets/vibe-tools-recent.svg assets/vibe-heatmap.json
+git add README.md assets/vibe-heatmap.svg assets/vibe-tools.svg assets/vibe-tools-recent.svg assets/vibe-tokens.svg assets/vibe-scorecard.svg assets/vibe-badges.svg assets/vibe-heatmap.json
 
 git commit -m "chore: update vibe heatmap (${YEAR}, ${SOURCE}, ${INTENSITY_MODE})"
 
