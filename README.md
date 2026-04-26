@@ -63,6 +63,8 @@ It generates:
 | ⚡ Recent SVG | Last 7 days usage with sparkline charts |
 | 📄 JSON Stats | Machine-readable stats for automation |
 | 🏅 Badges SVG | 12 coding achievements — earned or locked |
+| 🪙 Token SVG | Token economy breakdown by model |
+| 📋 Scorecard SVG | Messages, streaks, sessions, vibe power |
 | 📝 Profile README | Auto-updated with safe marker block replacement |
 
 <div align="center">
@@ -341,6 +343,8 @@ For tools without auto-detected paths, provide the history file explicitly:
     ├── vibe-heatmap.svg               # Yearly activity heatmap
     ├── vibe-tools.svg                 # All-time tool usage card
     ├── vibe-tools-recent.svg          # Last 7 days card
+    ├── vibe-tokens.svg                # Token economy by model
+    ├── vibe-scorecard.svg             # Vibe scorecard
     ├── vibe-badges.svg                # Coding achievements card
     └── vibe-heatmap.json              # Machine-readable stats
 ```
