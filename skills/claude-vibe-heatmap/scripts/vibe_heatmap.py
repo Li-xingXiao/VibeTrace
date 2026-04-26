@@ -64,6 +64,49 @@ TOOL_COLORS = {
     "gemini-cli": "#8b5cf6",
     "qwen-code": "#ef4444",
 }
+TOOL_ICON_PATHS = {
+    "claude": "M6 0C6.5 3.8 8.2 5.5 12 6C8.2 6.5 6.5 8.2 6 12C5.5 8.2 3.8 6.5 0 6C3.8 5.5 5.5 3.8 6 0Z",
+    "codex": "M6 .7L10.6 3.35V8.65L6 11.3L1.4 8.65V3.35Z",
+    "codefuse": "M7.5.5L3 6.5H6L4.5 11.5L9 5.5H6Z",
+    "codefuse-codex": "M6 .5L11 3V9L6 11.5L1 9V3Z",
+    "codefuse-claude": "M6 .5L7.6 4.1L11.5 4.7L8.7 7.3L9.4 11.2L6 9.4L2.6 11.2L3.3 7.3L.5 4.7L4.4 4.1Z",
+    "codebuddy": "M6 .5L11.5 2.5V6.5C11.5 9.5 9 11 6 11.5C3 11 .5 9.5.5 6.5V2.5Z",
+    "opencode": "M6 .5L11.2 3.8L9.8 9.8L2.2 9.8L.8 3.8Z",
+    "antigravity": "M6 0L11 10H7.5V12H4.5V10H1Z",
+    "copilot": "M2 2C2 1 3 0 4.5 0H7.5C9 0 10 1 10 2V4.5L12 6.5L10 7.5V9C10 10 9 11 7.5 11H4.5C3 11 2 10 2 9V7.5L0 6.5L2 4.5Z",
+    "cursor": "M2 .5V11L5 8L7.5 11.5L9 10.5L6.5 7L10.5 7Z",
+    "windsurf": "M0 8C1.5 4 3 4 4.5 6S7.5 8 9 6C10.5 4 11 4 12 6V8C11 10 10.5 10 9 8S6 6 4.5 8C3 10 1.5 10 0 8Z",
+    "continue": "M1.5 .5L10.5 6L1.5 11.5Z",
+    "aider": "M9.5.5L11.5 2.5L4.5 9.5C3.5 10.5 2 11 1 10.5L.5 10L1.5 9C2 9 3 8.5 3.5 8L10.5 1Z",
+    "gemini-cli": "M3 0C3.3 2.5 4.5 3.7 7 4C4.5 4.3 3.3 5.5 3 8C2.7 5.5 1.5 4.3 0 4C1.5 3.7 2.7 2.5 3 0ZM9 4C9.2 5.5 10 6.3 12 6.5C10 6.7 9.2 7.5 9 9C8.8 7.5 8 6.7 6 6.5C8 6.3 8.8 5.5 9 4Z",
+    "qwen-code": "M6 .5A5.5 5.5 0 1 0 10 9L12 11.5H10L8.5 9.5A5.5 5.5 0 0 0 6 .5ZM6 3A3 3 0 1 1 6 9A3 3 0 0 1 6 3Z",
+}
+_BG_RGB = (13, 17, 23)
+
+
+def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
+    h = hex_color.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _generate_palette(base_hex: str) -> List[str]:
+    r, g, b = _hex_to_rgb(base_hex)
+    fractions = [0.08, 0.22, 0.42, 0.65, 1.0]
+    return [
+        _rgb_to_hex(
+            int(_BG_RGB[0] + (r - _BG_RGB[0]) * f),
+            int(_BG_RGB[1] + (g - _BG_RGB[1]) * f),
+            int(_BG_RGB[2] + (b - _BG_RGB[2]) * f),
+        )
+        for f in fractions
+    ]
+
+
+TOOL_PALETTES = {tool: _generate_palette(color) for tool, color in TOOL_COLORS.items()}
 TIMESTAMP_KEYS = (
     "timestamp",
     "ts",
@@ -322,6 +365,27 @@ def tool_color(source: str) -> str:
         return TOOL_COLORS[source]
     colors = list(TOOL_COLORS.values())
     return colors[sum(ord(ch) for ch in source) % len(colors)]
+
+
+def tool_palette(source: str) -> List[str]:
+    if source in TOOL_PALETTES:
+        return TOOL_PALETTES[source]
+    return _generate_palette(tool_color(source))
+
+
+def tool_icon_svg(source: str, cx: float, cy: float, size: float, color: str) -> str:
+    path_data = TOOL_ICON_PATHS.get(source)
+    if not path_data:
+        return f'<circle cx="{cx}" cy="{cy}" r="{size / 2}" fill="{color}" />'
+    half = size / 2
+    scale = size / 12
+    x = cx - half
+    y = cy - half
+    fill_rule = ' fill-rule="evenodd"' if source == "qwen-code" else ""
+    return (
+        f'<g transform="translate({x},{y}) scale({scale})">'
+        f'<path d="{path_data}" fill="{color}"{fill_rule}/></g>'
+    )
 
 
 def expand_history_paths(pattern: str) -> List[Path]:
@@ -608,6 +672,7 @@ def render_svg(
     day_minutes: Dict[date, float],
     day_sessions: Dict[date, int],
     day_events: Dict[date, int],
+    day_dominant_source: Dict[date, str],
     intensity_mode: str,
     display_start: date,
     display_end: date,
@@ -686,7 +751,14 @@ def render_svg(
             intensity_value = minutes
 
         level = to_level(intensity_value, thresholds)
-        fill = PALETTE[level] if in_year else OUTSIDE_YEAR_COLOR
+        dominant = day_dominant_source.get(current)
+        if dominant:
+            pal = tool_palette(dominant)
+        elif source != "combined":
+            pal = tool_palette(source)
+        else:
+            pal = PALETTE
+        fill = pal[level] if in_year else OUTSIDE_YEAR_COLOR
 
         if visible_day:
             tooltip = (
@@ -707,24 +779,45 @@ def render_svg(
             )
         )
 
-    legend_x = width - 220
     legend_y = height - 24
-    legend_cells = []
-    for idx, color in enumerate(PALETTE):
-        x = legend_x + 28 + idx * (cell + 5)
-        legend_cells.append(
-            f'<rect x="{x}" y="{legend_y - 9}" width="{cell}" height="{cell}" rx="2" ry="2" fill="{color}" />'
+    legend_nodes: List[str] = []
+
+    active_tools = sorted(set(day_dominant_source.values())) if day_dominant_source else []
+    is_combined = source == "combined" and len(active_tools) > 1
+
+    if is_combined:
+        cursor_x = 16.0
+        for src in active_tools:
+            color = tool_color(src)
+            label = tool_label(src)
+            legend_nodes.append(tool_icon_svg(src, cursor_x + 5, legend_y - 3, 10, color))
+            cursor_x += 14
+            legend_nodes.append(
+                f'<text x="{cursor_x}" y="{legend_y}" fill="#8b949e" font-size="10" font-family="system-ui, sans-serif">{escape(label)}</text>'
+            )
+            cursor_x += len(label) * 6 + 10
+    else:
+        legend_x = width - 220
+        pal = tool_palette(source) if source != "combined" else PALETTE
+        legend_nodes.append(
+            f'<text x="{legend_x}" y="{legend_y}" fill="#8b949e" font-size="10" font-family="system-ui, sans-serif">Less</text>'
+        )
+        for idx, color in enumerate(pal):
+            x = legend_x + 28 + idx * (cell + 5)
+            legend_nodes.append(
+                f'<rect x="{x}" y="{legend_y - 9}" width="{cell}" height="{cell}" rx="2" ry="2" fill="{color}" />'
+            )
+        legend_nodes.append(
+            f'<text x="{legend_x + 28 + len(pal) * (cell + 5) + 4}" y="{legend_y}" fill="#8b949e" font-size="10" font-family="system-ui, sans-serif">More ({INTENSITY_LABELS[intensity_mode]})</text>'
         )
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="Vibe coding heatmap">
-  <rect x="0" y="0" width="{width}" height="{height}" fill="#0d1117" rx="10" />
+  <rect x="1" y="1" width="{width - 2}" height="{height - 2}" fill="#0d1117" stroke="#24493e" stroke-width="2" rx="10" />
   <text x="16" y="28" fill="#e6edf3" font-size="18" font-family="system-ui, sans-serif">{escape(title)}</text>
   {''.join(month_labels)}
   {''.join(day_label_nodes)}
   {''.join(cells)}
-  <text x="{legend_x}" y="{legend_y}" fill="#8b949e" font-size="10" font-family="system-ui, sans-serif">Less</text>
-  {''.join(legend_cells)}
-  <text x="{legend_x + 28 + len(PALETTE) * (cell + 5) + 4}" y="{legend_y}" fill="#8b949e" font-size="10" font-family="system-ui, sans-serif">More ({INTENSITY_LABELS[intensity_mode]})</text>
+  {''.join(legend_nodes)}
 </svg>
 """
     return svg
@@ -899,14 +992,16 @@ def render_tool_stats_svg(
         for idx, stat in enumerate(display_stats):
             x = 42
             y = 96 + idx * 28
+            src = str(stat.get("source", ""))
             label = str(stat["label"])
             duration = format_duration(float(stat["active_minutes"]))
             percent = float(stat["percent"])
             text = f"{label} - {duration} ({percent:.1f}%)"
+            icon = tool_icon_svg(src, x, y, 13, str(stat["color"]))
             legend_nodes.append(
                 "".join(
                     [
-                        f'<circle cx="{x}" cy="{y}" r="6" fill="{stat["color"]}" />',
+                        icon,
                         f'<text x="{x + 16}" y="{y + 5}" fill="#9aa7b6" font-size="13" font-family="system-ui, sans-serif">{escape(text)}</text>',
                     ]
                 )
@@ -970,6 +1065,34 @@ def build_report(
         for day, minutes in split_interval_by_day(start, end, year_start, year_end_exclusive):
             day_minutes[day] += minutes
 
+    day_dominant_source: Dict[date, str] = {}
+    if source == "combined":
+        source_names = sorted(set(e.source for e in selected))
+        src_day_mins: Dict[str, Dict[date, float]] = {s: defaultdict(float) for s in source_names}
+        for src in source_names:
+            src_intervals = [
+                (e.ts, e.ts + event_window) for e in selected if e.source == src
+            ]
+            for start, end in merge_intervals(src_intervals):
+                for day, mins in split_interval_by_day(start, end, year_start, year_end_exclusive):
+                    src_day_mins[src][day] += mins
+        all_dates = set()
+        for per_day in src_day_mins.values():
+            all_dates.update(per_day.keys())
+        for day in all_dates:
+            best_src, best_mins = "", 0.0
+            for src in source_names:
+                m = src_day_mins[src].get(day, 0.0)
+                if m > best_mins:
+                    best_mins = m
+                    best_src = src
+            if best_src:
+                day_dominant_source[day] = best_src
+    else:
+        for event in selected:
+            if year_start <= event.ts < year_end_exclusive:
+                day_dominant_source.setdefault(event.ts.date(), source)
+
     all_days = list(date_range(date(year, 1, 1), date(year, 12, 31)))
     for day in all_days:
         day_minutes.setdefault(day, 0.0)
@@ -1013,11 +1136,35 @@ def build_report(
         "day_minutes": {day: day_minutes[day] for day in all_days},
         "day_sessions": {day: day_sessions[day] for day in all_days},
         "day_events": {day: day_events[day] for day in all_days},
+        "day_dominant_source": day_dominant_source,
         "display_start": display_start,
         "display_end": display_end,
         "visible_end": visible_end,
         "days": day_rows,
     }
+
+
+_VIBE_TIERS = [
+    (500, "\U0001f3c6", "Vibe Transcendence"),
+    (200, "\U0001f525", "Vibe Legendary"),
+    (50, "\u26a1", "Full Vibe Mode"),
+    (10, "\U0001f3af", "Steady Vibes"),
+    (1, "\U0001f331", "Vibe Seedling"),
+    (0, "\u2728", "First Vibes"),
+]
+
+_VIBE_TAGLINES = [
+    "{hours}h of prompt-fu \u00b7 {sessions} AI conversations \u00b7 {days} days of pure vibe.",
+    "Typed a prompt. Got a feature. Repeated {sessions} times across {days} days.",
+    "{days} days, {sessions} sessions, {hours}h \u2014 not a single line written by hand. Probably.",
+    "My AI pair-programmer and I shipped for {days} days. We don't talk about the detours.",
+    "{sessions} prompts fired \u00b7 {days} days survived \u00b7 {hours}h of AI-assisted flow state.",
+    "{hours}h in the vibe zone. {sessions} sessions where the AI understood me on the first try. Just kidding.",
+    "Let the AI cook for {days} days. It served {sessions} courses across {hours}h. Chef's kiss.",
+    "{days} days of \"just one more prompt\" turned into {hours}h of shipped code.",
+    "Prompt engineering is a real job. {hours}h across {days} days, {sessions} sessions as proof.",
+    "I describe the vibes, the AI writes the code. {days} days and {hours}h in, still working.",
+]
 
 
 def update_readme_block(
@@ -1040,26 +1187,42 @@ def update_readme_block(
     sessions = int(summary["sessions"])
     active_minutes = int(summary["active_minutes"])
     active_hours = round(active_minutes / 60, 1)
-    source_label = "AI" if source == "combined" else tool_label(source)
+
+    tier_emoji, tier_title = "\u2728", "First Vibes"
+    for min_hours, emoji, title in _VIBE_TIERS:
+        if active_hours >= min_hours:
+            tier_emoji, tier_title = emoji, title
+            break
+
+    idx = (active_days + sessions + int(active_hours)) % len(_VIBE_TAGLINES)
+    tagline = _VIBE_TAGLINES[idx].format(
+        days=active_days, sessions=sessions, hours=active_hours,
+    )
+
     overall_tools = tool_stats.get("overall", [])
     tool_line = ""
     if isinstance(overall_tools, list) and overall_tools:
         top_tools = overall_tools[:3]
-        tool_line = "Current vibe bench: " + ", ".join(
-            f"{item['label']} {float(item['percent']):.1f}%" for item in top_tools
-        ) + "."
+        tool_line = (
+            "\U0001f9ea Vibe bench: "
+            + " \u00b7 ".join(
+                f"**{item['label']}** {float(item['percent']):.1f}%"
+                for item in top_tools
+            )
+        )
 
     block_lines = [
         MARKER_START,
-        f"### The {source_label} build streak, {year}",
-        f"{active_days} active days, {sessions} sessions, and about {active_hours} hours of \"wait, try that again\" turning into shipped code.",
+        f"### {tier_emoji} {tier_title} \u2014 {year}",
+        "",
+        f"> {tagline}",
     ]
     if tool_line:
         block_lines.extend(["", tool_line])
     block_lines.extend(
         [
             "",
-            f"`{active_days} active days` `{sessions} detours survived` `{active_hours}h of prompt-fueled shipping`",
+            f"`\U0001f525 {active_days} days vibing` `\U0001f4ac {sessions} prompt sessions` `\u23f1\ufe0f {active_hours}h in the zone`",
             "",
             "<br>",
             "",
@@ -1080,7 +1243,14 @@ def update_readme_block(
         block_lines.extend(["", f'<img src="{tools_svg_ref}" alt="Vibe coding tool usage mix" width="58%">'])
     elif recent_tools_svg_ref:
         block_lines.extend(["", f'<img src="{recent_tools_svg_ref}" alt="Recent vibe coding tool usage" width="58%">'])
-    block_lines.extend(["", f"_Last refreshed: {updated_at}_", MARKER_END])
+    block_lines.extend(
+        [
+            "",
+            "_Built with vibes, shipped with confidence._",
+            f"_Last refreshed: {updated_at}_",
+            MARKER_END,
+        ]
+    )
     block = "\n".join(block_lines)
 
     if MARKER_START in content and MARKER_END in content:
@@ -1147,6 +1317,7 @@ def main() -> int:
         day_minutes=report["day_minutes"],
         day_sessions=report["day_sessions"],
         day_events=report["day_events"],
+        day_dominant_source=report["day_dominant_source"],
         intensity_mode=args.intensity_mode,
         display_start=report["display_start"],
         display_end=report["display_end"],
