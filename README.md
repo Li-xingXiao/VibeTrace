@@ -30,6 +30,7 @@ It generates:
 - **🔒 Safe README Updates** — only touches the `<!-- vibe-heatmap:start -->` marker block. Your existing profile content is never overwritten
 - **🔌 15 AI Tools Supported** — Claude, Codex, CodeFuse, OpenCode, CodeBuddy, Antigravity, GitHub Copilot, Cursor, Windsurf, Continue, Aider, Gemini CLI, Qwen Code, and custom sources
 - **🏅 12 Coding Achievements** — streak badges (3-day to 100-day), activity milestones, marathon sessions, multi-tool diversity, and time-pattern awards. Earned badges glow; locked ones stay dimmed with progress hints
+- **🔄 Cross-Device Sync** — aggregate history from multiple machines (laptop + servers) via git-based sync, SSH remote pull, or manual import. All activity merges into one unified heatmap
 
 > **Why from local history?** Cloud-based trackers require API keys, browser extensions, or telemetry opt-ins. VibeTrace reads the conversation logs already sitting on your machine — zero setup overhead, zero data leaving your laptop.
 
@@ -47,6 +48,7 @@ It generates:
 - **🔒 安全的 README 更新** — 只替换 `<!-- vibe-heatmap:start -->` 标记块，你已有的个人主页内容绝不会被覆盖
 - **🔌 支持 15 种 AI 工具** — Claude、Codex、CodeFuse、OpenCode、CodeBuddy、Antigravity、GitHub Copilot、Cursor、Windsurf、Continue、Aider、Gemini CLI、Qwen Code，以及自定义数据源
 - **🏅 12 个编程成就** — 连续打卡徽章（3 天到 100 天）、活跃天数里程碑、马拉松编程、多工具使用、时间模式奖章。已获得的徽章高亮显示，未解锁的灰显并提示进度
+- **🔄 跨设备同步** — 汇总多台设备（笔记本 + 服务器）的历史记录，支持 Git 同步、SSH 远程拉取或手动导入。所有活动合并到一张统一的热力图
 
 > **为什么用本地历史？** 云端追踪器需要 API Key、浏览器插件或遥测授权。VibeTrace 直接读取你电脑上已有的对话日志——零额外配置，数据零外传。
 
@@ -286,6 +288,96 @@ For tools without auto-detected paths, provide the history file explicitly:
 | `/vibe auto enable 6h` | Preset: every 6 hours |
 | `/vibe auto enable "<cron>"` | Custom cron schedule, e.g. `"0 */12 * * *"` |
 | `/vibe auto disable` | Remove the auto-publish crontab entry |
+| `/vibe sync push` | Export local history and push to profile repo for cross-device merge |
+| `/vibe sync pull` | Pull sync data from profile repo + SSH remotes |
+| `/vibe sync status` | Show device name, synced devices, and remotes |
+| `/vibe sync remote add <name> <host>` | Register an SSH remote server |
+| `/vibe sync remote remove <name>` | Remove a registered remote |
+| `/vibe sync import <file>` | Import a history file from another device |
+| `/vibe set device=<name>` | Name this device for cross-device sync |
+
+---
+
+## Cross-Device Sync / 跨设备同步
+
+If you use AI coding tools on multiple machines (laptop, servers, VMs), VibeTrace can aggregate all activity into one unified heatmap. Three methods are supported:
+
+如果你在多台设备上使用 AI 编程工具（笔记本、服务器、虚拟机），VibeTrace 可以将所有活动汇总到一个统一的热力图中。支持三种方式：
+
+### Method 1: Git Sync (VibeTrace on each device) / 方式一：Git 同步
+
+The simplest approach when VibeTrace is installed on every device. Each device exports its data to the profile repo.
+
+```bash
+# On each device (laptop, server-1, server-2, ...):
+/vibe set github=alice device=macbook      # One-time setup
+/vibe sync push                            # Export & push local data
+
+# On any device — heatmap auto-merges all devices:
+/vibe heatmap
+```
+
+每台设备上安装 VibeTrace 后，运行 `sync push` 导出数据到 profile 仓库，生成热力图时自动合并所有设备数据。
+
+### Method 2: SSH Remote Pull (main machine only) / 方式二：SSH 远程拉取
+
+When you have SSH access to remote servers but don't want to install VibeTrace on each one. Your main machine pulls history files directly.
+
+```bash
+# Register remotes:
+/vibe sync remote add gpu-server root@10.0.0.1
+/vibe sync remote add dev-box dev@192.168.1.50
+
+# Pull from all remotes:
+/vibe sync pull
+
+# Generate combined heatmap:
+/vibe heatmap
+```
+
+当你有远程服务器的 SSH 访问权限但不想在每台上安装 VibeTrace 时使用。主机直接通过 SSH 拉取历史文件。
+
+### Method 3: Manual Import / 方式三：手动导入
+
+For one-off transfers without SSH access.
+
+```bash
+# Copy the history file from remote (any method):
+scp server:~/.claude/history.jsonl ./remote-history.jsonl
+
+# Import it:
+/vibe sync import ./remote-history.jsonl device=my-server
+
+# Generate combined heatmap:
+/vibe heatmap
+```
+
+适用于没有 SSH 直连的一次性传输场景。
+
+### How Sync Works / 同步原理
+
+```
+Device A                Device B              Main Machine
+/vibe sync push         /vibe sync push       /vibe heatmap
+     │                       │                      │
+     ▼                       ▼                      ▼
+profile-repo/assets/vibe-sync/              Local History
+  device-a.json              │                      │
+  device-b.json ─────────────┘                      │
+       │                                            │
+       └──────── auto-merge ────────────────────────┘
+                      │
+                      ▼
+               Combined Heatmap
+```
+
+Each device exports per-day aggregate stats (minutes, sessions, events per tool) to a compact JSON file (~44 KB/year). During heatmap generation, data from all other devices is automatically merged. Your own device's export is skipped to avoid double-counting.
+
+每台设备导出每日聚合统计数据到一个紧凑的 JSON 文件。生成热力图时自动合并所有其他设备的数据，跳过本机数据避免重复计算。
+
+> **Privacy note:** Sync files contain only aggregate minute/session/event counts per day — no conversation content, no prompts, no code. If your profile repo is public, this data is visible.
+>
+> **隐私说明：** 同步文件只包含每日分钟/会话/事件的聚合计数，不含对话内容、提示词或代码。
 
 ---
 
@@ -346,7 +438,10 @@ For tools without auto-detected paths, provide the history file explicitly:
     ├── vibe-tokens.svg                # Token economy by model
     ├── vibe-scorecard.svg             # Vibe scorecard
     ├── vibe-badges.svg                # Coding achievements card
-    └── vibe-heatmap.json              # Machine-readable stats
+    ├── vibe-heatmap.json              # Machine-readable stats
+    └── vibe-sync/                     # Cross-device sync data (optional)
+        ├── macbook.json               # Device export
+        └── server-1.json              # Device export
 ```
 
 Your existing `README.md` content is always preserved. VibeTrace only replaces the content between:
@@ -364,6 +459,7 @@ If the markers don't exist yet, VibeTrace appends them to the end of your README
 ## Privacy / 隐私
 
 - Only reads **local** history files — nothing is sent to external services
+- Cross-device sync files contain only aggregate stats (minutes/sessions/events per day) — no conversation content
 - All processing happens inside your Claude Code session
 - API keys, tokens, passwords, and PII are never included in generated outputs
 - History files are read-only — VibeTrace never modifies your conversation logs
@@ -393,6 +489,7 @@ If the markers don't exist yet, VibeTrace appends them to the end of your README
 - [x] Session detection with idle gap analysis
 - [x] Scheduled auto-publish (daily/weekly cron + session-start hook)
 - [x] Badge/achievement system for coding streaks
+- [x] Cross-device sync (git-based, SSH pull, manual import)
 
 ---
 
