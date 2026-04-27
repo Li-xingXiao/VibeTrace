@@ -1,0 +1,33 @@
+{
+  "name": "vibetrace",
+  "version": "1.0.0",
+  "description": "Turn your local AI coding history into a GitHub-style heatmap",
+  "bin": {
+    "vibetrace": "bin/vibetrace"
+  },
+  "files": [
+    "bin/",
+    "skills/claude-vibe-heatmap/scripts/run_profile_update.sh",
+    "skills/claude-vibe-heatmap/scripts/vibe_heatmap.py",
+    "skills/claude-vibe-heatmap/scripts/auto-update-check.sh",
+    "skills/claude-vibe-heatmap/SKILL.md"
+  ],
+  "keywords": [
+    "github",
+    "heatmap",
+    "ai",
+    "coding",
+    "profile",
+    "claude",
+    "codex"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Li-xingXiao/VibeTrace.git"
+  },
+  "homepage": "https://github.com/Li-xingXiao/VibeTrace",
+  "engines": {
+    "node": ">=14"
+  }
+}

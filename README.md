@@ -83,6 +83,18 @@ It generates:
 
 ## Quick Start / 快速开始
 
+**npm (standalone CLI):**
+
+```bash
+npm install -g vibetrace
+
+# Link your GitHub account
+vibetrace set github=<your-github-username>
+
+# Generate and publish
+vibetrace heatmap
+```
+
 **Claude Code (marketplace):**
 
 ```bash
@@ -468,7 +480,8 @@ If the markers don't exist yet, VibeTrace appends them to the end of your README
 
 ## Requirements / 环境要求
 
-- Claude Code or Codex (this is a skill for either)
+- **npm CLI:** Node.js ≥ 14, `bash`, and `python3` on your PATH
+- **Skill mode:** Claude Code or Codex
 - Some AI coding history on your local machine
 - A GitHub account (for publishing to your profile)
 - That's it. No API keys, no accounts, no extra dependencies.

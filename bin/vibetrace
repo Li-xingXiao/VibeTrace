@@ -1,0 +1,19 @@
+#!/usr/bin/env node
+const { spawn } = require("child_process");
+const path = require("path");
+
+const script = path.join(
+  __dirname,
+  "..",
+  "skills",
+  "claude-vibe-heatmap",
+  "scripts",
+  "run_profile_update.sh"
+);
+
+const child = spawn("bash", [script, ...process.argv.slice(2)], {
+  stdio: "inherit",
+  env: { ...process.env, VIBETRACE_NPM: "1" },
+});
+
+child.on("close", (code) => process.exit(code ?? 1));
