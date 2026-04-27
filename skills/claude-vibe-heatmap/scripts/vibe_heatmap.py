@@ -8,6 +8,7 @@ import glob
 import json
 import math
 import os
+import socket
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -230,6 +231,26 @@ def parse_args() -> argparse.Namespace:
         default=[],
         metavar="TOOL=PATH_OR_GLOB",
         help="Add a generic JSON/JSONL history source, for example cursor=~/.cursor/history.jsonl.",
+    )
+    parser.add_argument(
+        "--export-device",
+        default="",
+        help="Export local data to a device sync JSON file and exit.",
+    )
+    parser.add_argument(
+        "--device-name",
+        default="",
+        help="Device identifier for sync (default: hostname).",
+    )
+    parser.add_argument(
+        "--import-devices",
+        default="",
+        help="Directory of device export JSONs to merge into the heatmap.",
+    )
+    parser.add_argument(
+        "--no-default-sources",
+        action="store_true",
+        help="Skip loading default history paths (use only --extra-history).",
     )
     parser.add_argument(
         "--output-svg",
@@ -1471,9 +1492,10 @@ def build_report(
             day_minutes[day] += minutes
 
     day_dominant_source: Dict[date, str] = {}
+    src_day_mins: Dict[str, Dict[date, float]] = {}
     if source == "combined":
         source_names = sorted(set(e.source for e in selected))
-        src_day_mins: Dict[str, Dict[date, float]] = {s: defaultdict(float) for s in source_names}
+        src_day_mins = {s: defaultdict(float) for s in source_names}
         for src in source_names:
             src_intervals = [
                 (e.ts, e.ts + event_window) for e in selected if e.source == src
@@ -1542,6 +1564,7 @@ def build_report(
         "day_sessions": {day: day_sessions[day] for day in all_days},
         "day_events": {day: day_events[day] for day in all_days},
         "day_dominant_source": day_dominant_source,
+        "src_day_mins": {s: dict(dm) for s, dm in src_day_mins.items()},
         "display_start": display_start,
         "display_end": display_end,
         "visible_end": visible_end,
@@ -1686,6 +1709,304 @@ def render_badges_svg(
 """
 
 
+def export_device_data(
+    events: Sequence[Event],
+    stats_data: Dict[str, object],
+    *,
+    year: int,
+    device_name: str,
+    idle_gap_minutes: float,
+    event_window_minutes: float,
+    tz,
+) -> dict:
+    year_start = datetime(year, 1, 1, tzinfo=tz)
+    year_end_exclusive = datetime(year + 1, 1, 1, tzinfo=tz)
+    event_window = timedelta(minutes=event_window_minutes)
+    idle_gap = timedelta(minutes=idle_gap_minutes)
+
+    tools = sorted(set(e.source for e in events))
+    days: Dict[str, Dict[str, Dict[str, float]]] = {}
+
+    for tool in tools:
+        tool_events = [e for e in events if e.source == tool and year_start <= e.ts < year_end_exclusive]
+        if not tool_events:
+            continue
+        tool_sessions = build_sessions(tool_events, idle_gap)
+
+        intervals = [(e.ts, e.ts + event_window) for e in tool_events]
+        for start, end in merge_intervals(intervals):
+            for day, mins in split_interval_by_day(start, end, year_start, year_end_exclusive):
+                ds = day.isoformat()
+                if ds not in days:
+                    days[ds] = {}
+                if tool not in days[ds]:
+                    days[ds][tool] = {"min": 0.0, "ses": 0, "evt": 0}
+                days[ds][tool]["min"] += mins
+
+        for e in tool_events:
+            ds = e.ts.astimezone(tz).date().isoformat()
+            if ds not in days:
+                days[ds] = {}
+            if tool not in days[ds]:
+                days[ds][tool] = {"min": 0.0, "ses": 0, "evt": 0}
+            days[ds][tool]["evt"] += 1
+
+        for sess in tool_sessions:
+            ds = sess.start.astimezone(tz).date().isoformat()
+            if ds not in days:
+                days[ds] = {}
+            if tool not in days[ds]:
+                days[ds][tool] = {"min": 0.0, "ses": 0, "evt": 0}
+            days[ds][tool]["ses"] += 1
+
+    for ds in days:
+        for tool in days[ds]:
+            days[ds][tool]["min"] = round(days[ds][tool]["min"], 1)
+
+    hour_counts = [0] * 24
+    for e in events:
+        if year_start <= e.ts < year_end_exclusive:
+            hour_counts[e.ts.astimezone(tz).hour] += 1
+
+    all_sessions = build_sessions(
+        [e for e in events if year_start <= e.ts < year_end_exclusive], idle_gap
+    )
+    longest_min = 0.0
+    for sess in all_sessions:
+        dur = (sess.end - sess.start).total_seconds() / 60.0
+        longest_min = max(longest_min, dur)
+
+    sc: Dict[str, object] = {}
+    if stats_data:
+        sc["total_messages"] = int(stats_data.get("total_messages", 0))
+        sc["total_tool_calls"] = int(stats_data.get("total_tool_calls", 0))
+        sc["longest_session_ms"] = int(stats_data.get("longest_session_ms", 0))
+        mu = stats_data.get("model_usage", {})
+        if mu:
+            sc["model_usage"] = {
+                model: {k: int(v) for k, v in usage.items()}
+                for model, usage in mu.items()
+            }
+
+    return {
+        "v": 1,
+        "device": device_name,
+        "exported_at": datetime.now(tz).isoformat(),
+        "days": days,
+        "hour_counts": hour_counts,
+        "longest_session_min": round(longest_min, 1),
+        "stats_cache": sc,
+    }
+
+
+def load_device_imports(
+    import_dir: str,
+    own_device: str,
+    year: int,
+) -> Optional[dict]:
+    import_path = Path(import_dir)
+    if not import_path.is_dir():
+        return None
+
+    files = sorted(import_path.glob("*.json"))
+    if not files:
+        return None
+
+    merged_days: Dict[str, Dict[str, Dict[str, float]]] = {}
+    merged_hours = [0] * 24
+    merged_sc: Dict[str, object] = {
+        "total_messages": 0,
+        "total_tool_calls": 0,
+        "longest_session_ms": 0,
+        "model_usage": {},
+    }
+    device_count = 0
+
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("v") != 1:
+            continue
+        if data.get("device", "") == own_device:
+            continue
+
+        device_count += 1
+        for ds, tools in data.get("days", {}).items():
+            if not ds.startswith(str(year)):
+                continue
+            if ds not in merged_days:
+                merged_days[ds] = {}
+            for tool, stats in tools.items():
+                if tool not in merged_days[ds]:
+                    merged_days[ds][tool] = {"min": 0.0, "ses": 0, "evt": 0}
+                merged_days[ds][tool]["min"] += float(stats.get("min", 0))
+                merged_days[ds][tool]["ses"] += int(stats.get("ses", 0))
+                merged_days[ds][tool]["evt"] += int(stats.get("evt", 0))
+
+        hc = data.get("hour_counts", [])
+        for i in range(min(24, len(hc))):
+            merged_hours[i] += int(hc[i])
+
+        sc = data.get("stats_cache", {})
+        merged_sc["total_messages"] = int(merged_sc["total_messages"]) + int(sc.get("total_messages", 0))
+        merged_sc["total_tool_calls"] = int(merged_sc["total_tool_calls"]) + int(sc.get("total_tool_calls", 0))
+        ls = int(sc.get("longest_session_ms", 0))
+        if ls > int(merged_sc["longest_session_ms"]):
+            merged_sc["longest_session_ms"] = ls
+        for model, usage in sc.get("model_usage", {}).items():
+            existing = merged_sc["model_usage"].get(model, {})
+            for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests"):
+                existing[key] = existing.get(key, 0) + int(usage.get(key, 0))
+            merged_sc["model_usage"][model] = existing
+
+    if device_count == 0:
+        return None
+
+    return {
+        "day_tool_stats": merged_days,
+        "hour_counts": merged_hours,
+        "stats_cache": merged_sc,
+        "device_count": device_count,
+    }
+
+
+def merge_imported_data(
+    report: dict,
+    tool_stats: dict,
+    stats_data: Dict[str, object],
+    imported: dict,
+    year: int,
+    tz,
+) -> Tuple[dict, dict, Dict[str, object]]:
+    day_tool_stats = imported["day_tool_stats"]
+
+    for ds, tools in day_tool_stats.items():
+        try:
+            d = date.fromisoformat(ds)
+        except ValueError:
+            continue
+        if d.year != year:
+            continue
+        for tool, stats in tools.items():
+            report["day_minutes"][d] = report["day_minutes"].get(d, 0.0) + stats["min"]
+            report["day_sessions"][d] = report["day_sessions"].get(d, 0) + int(stats["ses"])
+            report["day_events"][d] = report["day_events"].get(d, 0) + int(stats["evt"])
+
+            src_day_mins = report.get("src_day_mins", {})
+            if tool not in src_day_mins:
+                src_day_mins[tool] = {}
+            src_day_mins[tool][d] = src_day_mins[tool].get(d, 0.0) + stats["min"]
+            report["src_day_mins"] = src_day_mins
+
+    src_day_mins = report.get("src_day_mins", {})
+    if src_day_mins:
+        all_dates = set()
+        for per_day in src_day_mins.values():
+            all_dates.update(per_day.keys())
+        for d in all_dates:
+            best_src, best_mins = "", 0.0
+            for src in src_day_mins:
+                m = src_day_mins[src].get(d, 0.0)
+                if m > best_mins:
+                    best_mins = m
+                    best_src = src
+            if best_src:
+                report["day_dominant_source"][d] = best_src
+
+    all_days = list(date_range(date(year, 1, 1), date(year, 12, 31)))
+    total_minutes = sum(report["day_minutes"].get(d, 0.0) for d in all_days)
+    active_days_count = sum(1 for d in all_days if report["day_minutes"].get(d, 0.0) > 0)
+    total_sessions = sum(report["day_sessions"].get(d, 0) for d in all_days)
+    total_events = sum(report["day_events"].get(d, 0) for d in all_days)
+    report["summary"] = {
+        "active_minutes": round(total_minutes),
+        "active_days": active_days_count,
+        "sessions": total_sessions,
+        "events": total_events,
+        "avg_minutes_per_active_day": round(total_minutes / active_days_count, 2) if active_days_count else 0.0,
+        "max_day_minutes": round(max((report["day_minutes"].get(d, 0.0) for d in all_days), default=0.0), 2),
+    }
+    report["days"] = [
+        {
+            "date": d.isoformat(),
+            "active_minutes": round(report["day_minutes"].get(d, 0.0), 2),
+            "events": int(report["day_events"].get(d, 0)),
+            "sessions": int(report["day_sessions"].get(d, 0)),
+        }
+        for d in all_days
+    ]
+
+    year_start_dt = datetime(year, 1, 1, tzinfo=tz)
+    year_end_dt = datetime(year + 1, 1, 1, tzinfo=tz)
+    visible_end = visible_end_for_year(year, tz)
+    recent_days_count = int(tool_stats.get("recent_days", 7))
+    recent_end = datetime.combine(visible_end + timedelta(days=1), time.min, tzinfo=tz)
+    recent_start = max(year_start_dt, recent_end - timedelta(days=max(recent_days_count, 1)))
+
+    for period_key, period_start, period_end in [
+        ("overall", year_start_dt, year_end_dt),
+        ("recent", recent_start, recent_end),
+    ]:
+        existing = {str(row["source"]): row for row in tool_stats.get(period_key, [])}
+        for ds, tools in day_tool_stats.items():
+            try:
+                d = date.fromisoformat(ds)
+            except ValueError:
+                continue
+            d_start = datetime.combine(d, time.min, tzinfo=tz)
+            d_end = datetime.combine(d + timedelta(days=1), time.min, tzinfo=tz)
+            if d_end <= period_start or d_start >= period_end:
+                continue
+            for tool, stats in tools.items():
+                if tool not in existing:
+                    existing[tool] = {
+                        "source": tool,
+                        "label": tool_label(tool),
+                        "color": tool_color(tool),
+                        "active_minutes": 0.0,
+                        "sessions": 0,
+                        "events": 0,
+                        "percent": 0.0,
+                        "sparkline": [],
+                    }
+                existing[tool]["active_minutes"] = round(
+                    float(existing[tool]["active_minutes"]) + stats["min"], 2
+                )
+                existing[tool]["sessions"] = int(existing[tool]["sessions"]) + int(stats["ses"])
+                existing[tool]["events"] = int(existing[tool]["events"]) + int(stats["evt"])
+
+        rows = list(existing.values())
+        total_min = sum(float(r["active_minutes"]) for r in rows)
+        for r in rows:
+            r["percent"] = round((float(r["active_minutes"]) / total_min) * 100, 2) if total_min else 0.0
+        rows.sort(key=lambda r: (float(r["active_minutes"]), int(r["sessions"]), int(r["events"])), reverse=True)
+        tool_stats[period_key] = rows
+
+    imp_hours = imported.get("hour_counts", [])
+    existing_hours = stats_data.get("hour_counts", defaultdict(int))
+    for i in range(min(24, len(imp_hours))):
+        existing_hours[i] = existing_hours.get(i, 0) + imp_hours[i]
+    stats_data["hour_counts"] = existing_hours
+
+    imp_sc = imported.get("stats_cache", {})
+    stats_data["total_messages"] = int(stats_data.get("total_messages", 0)) + int(imp_sc.get("total_messages", 0))
+    stats_data["total_tool_calls"] = int(stats_data.get("total_tool_calls", 0)) + int(imp_sc.get("total_tool_calls", 0))
+    imp_ls = int(imp_sc.get("longest_session_ms", 0))
+    if imp_ls > int(stats_data.get("longest_session_ms", 0)):
+        stats_data["longest_session_ms"] = imp_ls
+    for model, usage in imp_sc.get("model_usage", {}).items():
+        existing_mu = stats_data.get("model_usage", {})
+        eu = existing_mu.get(model, {})
+        for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests"):
+            eu[key] = eu.get(key, 0) + int(usage.get(key, 0))
+        existing_mu[model] = eu
+        stats_data["model_usage"] = existing_mu
+
+    return report, tool_stats, stats_data
+
+
 def update_readme_block(
     *,
     readme_path: Path,
@@ -1770,18 +2091,20 @@ def main() -> int:
     args = parse_args()
 
     tz = resolve_tz(args.tz)
-    claude_history = Path(os.path.expanduser(args.claude_history))
-    codex_history = Path(os.path.expanduser(args.codex_history))
-    codefuse_codex_history = Path(os.path.expanduser(args.codefuse_codex_history))
-    codefuse_claude_history = Path(os.path.expanduser(args.codefuse_claude_history))
+    device_name = args.device_name.strip() or socket.gethostname().split(".")[0]
 
     events: List[Event] = []
-    events.extend(load_claude_events(claude_history, tz))
-    events.extend(load_codex_events(codex_history, tz))
-    events.extend(load_codex_events(codefuse_codex_history, tz, source="codefuse-codex"))
-    events.extend(load_claude_events(codefuse_claude_history, tz, source="codefuse-claude"))
-    events.extend(load_generic_history(args.codefuse_projects_history, tz, source="codefuse"))
-    events.extend(load_generic_history(args.opencode_history, tz, source="opencode"))
+    if not args.no_default_sources:
+        claude_history = Path(os.path.expanduser(args.claude_history))
+        codex_history = Path(os.path.expanduser(args.codex_history))
+        codefuse_codex_history = Path(os.path.expanduser(args.codefuse_codex_history))
+        codefuse_claude_history = Path(os.path.expanduser(args.codefuse_claude_history))
+        events.extend(load_claude_events(claude_history, tz))
+        events.extend(load_codex_events(codex_history, tz))
+        events.extend(load_codex_events(codefuse_codex_history, tz, source="codefuse-codex"))
+        events.extend(load_claude_events(codefuse_claude_history, tz, source="codefuse-claude"))
+        events.extend(load_generic_history(args.codefuse_projects_history, tz, source="codefuse"))
+        events.extend(load_generic_history(args.opencode_history, tz, source="opencode"))
 
     for item in args.extra_history:
         if "=" not in item:
@@ -1792,6 +2115,33 @@ def main() -> int:
         if not extra_source or not extra_pattern:
             raise ValueError(f"--extra-history must be TOOL=PATH_OR_GLOB, got: {item}")
         events.extend(load_generic_history(extra_pattern, tz, source=extra_source))
+
+    export_path = args.export_device.strip()
+    if export_path:
+        stats_cache_paths = list(args.stats_cache) if args.stats_cache else []
+        if not args.no_default_sources:
+            stats_cache_paths.extend([
+                "~/.claude/stats-cache.json",
+                "~/.codefuse/engine/cc/stats-cache.json",
+            ])
+        sd = load_stats_caches(stats_cache_paths) if stats_cache_paths else {
+            "total_messages": 0, "total_sessions": 0, "total_tool_calls": 0,
+            "model_usage": {}, "hour_counts": defaultdict(int),
+            "longest_session_ms": 0, "longest_session_messages": 0,
+        }
+        payload = export_device_data(
+            events, sd,
+            year=args.year,
+            device_name=device_name,
+            idle_gap_minutes=args.idle_gap_minutes,
+            event_window_minutes=args.event_window_minutes,
+            tz=tz,
+        )
+        out = Path(export_path).expanduser()
+        ensure_parent(out)
+        out.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        print(f"[vibe] Exported device data to {out} ({len(payload.get('days', {}))} days)")
+        return 0
 
     report = build_report(
         events=events,
@@ -1863,6 +2213,17 @@ def main() -> int:
         "~/.codefuse/engine/cc/stats-cache.json",
     ]
     stats_data = load_stats_caches(stats_cache_paths)
+
+    import_dir = args.import_devices.strip()
+    if import_dir:
+        imported = load_device_imports(import_dir, device_name, args.year)
+        if imported:
+            report, tool_stats, stats_data = merge_imported_data(
+                report, tool_stats, stats_data, imported, args.year, tz,
+            )
+            n_dev = imported["device_count"]
+            print(f"[vibe] Merged data from {n_dev} remote device{'s' if n_dev != 1 else ''}.")
+
     model_usage = stats_data["model_usage"]
 
     total_input = sum(u.get("inputTokens", 0) for u in model_usage.values())

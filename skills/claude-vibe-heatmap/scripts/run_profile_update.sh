@@ -94,6 +94,8 @@ load_saved_config() {
     SAVED_GIT_AUTHOR_NAME="${VIBE_GIT_AUTHOR_NAME:-}"
     SAVED_GIT_AUTHOR_EMAIL="${VIBE_GIT_AUTHOR_EMAIL:-}"
     SAVED_AUTH_MODE="${VIBE_AUTH_MODE:-}"
+    SAVED_DEVICE_NAME="${VIBE_DEVICE_NAME:-}"
+    SAVED_SYNC_REMOTES="${VIBE_SYNC_REMOTES:-}"
   fi
 }
 
@@ -111,8 +113,20 @@ save_config() {
     printf 'VIBE_GIT_AUTHOR_NAME=%q\n' "$author_name"
     printf 'VIBE_GIT_AUTHOR_EMAIL=%q\n' "$author_email"
     printf 'VIBE_AUTH_MODE=%q\n' "$auth_mode"
+    printf 'VIBE_DEVICE_NAME=%q\n' "${VIBE_DEVICE_NAME:-}"
+    printf 'VIBE_SYNC_REMOTES=%q\n' "${VIBE_SYNC_REMOTES:-}"
   } > "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
+}
+
+save_full_config() {
+  load_saved_config
+  save_config \
+    "${SAVED_PROFILE_REPO}" \
+    "${SAVED_GITHUB_USERNAME}" \
+    "${SAVED_GIT_AUTHOR_NAME}" \
+    "${SAVED_GIT_AUTHOR_EMAIL}" \
+    "${SAVED_AUTH_MODE}"
 }
 
 show_config() {
@@ -470,6 +484,331 @@ auto_detect_profile_repo() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# sync: cross-device data sync
+# ---------------------------------------------------------------------------
+
+resolve_device_name() {
+  if [[ -n "${VIBE_DEVICE_NAME:-}" ]]; then
+    printf '%s\n' "$VIBE_DEVICE_NAME"
+  elif [[ -n "${SAVED_DEVICE_NAME:-}" ]]; then
+    printf '%s\n' "$SAVED_DEVICE_NAME"
+  else
+    hostname -s 2>/dev/null || hostname
+  fi
+}
+
+sync_push() {
+  load_saved_config
+  local profile_repo="${SAVED_PROFILE_REPO:-${PROFILE_REPO:-}}"
+  if [[ -z "$profile_repo" ]]; then
+    profile_repo="$(auto_detect_profile_repo || true)"
+  fi
+  [[ -n "$profile_repo" && -d "$profile_repo/.git" ]] || die "Profile repo not configured. Run /vibe set github=<username> first."
+
+  local device
+  device="$(resolve_device_name)"
+  local sync_dir="$profile_repo/assets/vibe-sync"
+  mkdir -p "$sync_dir"
+
+  local cmd=(
+    python3 "$HEATMAP_SCRIPT"
+    --export-device "$sync_dir/$device.json"
+    --device-name "$device"
+  )
+  for extra in "${EXTRA_HISTORY_ARGS[@]}"; do
+    cmd+=(--extra-history "$extra")
+  done
+  if [[ -n "$TZ_NAME" ]]; then
+    cmd+=(--tz "$TZ_NAME")
+  fi
+
+  "${cmd[@]}"
+
+  cd "$profile_repo"
+  git add "assets/vibe-sync/$device.json"
+  if git diff --cached --quiet; then
+    log "No changes to sync."
+    return 0
+  fi
+  git commit -m "chore: sync device $device"
+  git push
+  log "Sync push complete for device '$device'."
+}
+
+sync_pull() {
+  load_saved_config
+  local profile_repo="${SAVED_PROFILE_REPO:-${PROFILE_REPO:-}}"
+  if [[ -z "$profile_repo" ]]; then
+    profile_repo="$(auto_detect_profile_repo || true)"
+  fi
+  [[ -n "$profile_repo" && -d "$profile_repo/.git" ]] || die "Profile repo not configured. Run /vibe set github=<username> first."
+
+  log "Pulling latest from profile repo..."
+  git -C "$profile_repo" pull --rebase || log "Warning: git pull failed, continuing with local data."
+
+  local remotes="${SAVED_SYNC_REMOTES:-${VIBE_SYNC_REMOTES:-}}"
+  if [[ -n "$remotes" ]]; then
+    local sync_dir="$profile_repo/assets/vibe-sync"
+    mkdir -p "$sync_dir"
+    local changed=0
+    local IFS=','
+    for entry in $remotes; do
+      IFS=' '
+      local rname="${entry%%=*}"
+      local rhost="${entry#*=}"
+      if [[ -z "$rname" || -z "$rhost" ]]; then
+        log "Skipping invalid remote entry: $entry"
+        continue
+      fi
+      log "Pulling from remote '$rname' ($rhost)..."
+      sync_pull_one_remote "$rname" "$rhost" "$sync_dir" && changed=1 || log "Warning: pull from '$rname' had issues."
+    done
+    if [[ "$changed" -eq 1 ]]; then
+      cd "$profile_repo"
+      git add assets/vibe-sync/
+      if ! git diff --cached --quiet; then
+        git commit -m "chore: sync remote devices"
+        git push
+        log "Remote sync data committed and pushed."
+      fi
+    fi
+  fi
+  log "Sync pull complete."
+}
+
+sync_pull_one_remote() {
+  local name="$1" host="$2" sync_dir="$3"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+
+  local known_paths=(
+    "claude:.claude/history.jsonl"
+    "codex:.codex/history.jsonl"
+    "codefuse-claude:.codefuse/engine/cc/history.jsonl"
+    "codefuse-codex:.codefuse/engine/codex/history.jsonl"
+  )
+  local extra_args=()
+  for spec in "${known_paths[@]}"; do
+    local tool="${spec%%:*}"
+    local rpath="${spec#*:}"
+    scp -q "$host:~/$rpath" "$tmp_dir/${tool}.jsonl" 2>/dev/null || true
+  done
+  scp -q "$host:~/.claude/stats-cache.json" "$tmp_dir/stats-cache-1.json" 2>/dev/null || true
+  scp -q "$host:~/.codefuse/engine/cc/stats-cache.json" "$tmp_dir/stats-cache-2.json" 2>/dev/null || true
+
+  for f in "$tmp_dir"/*.jsonl; do
+    [[ -f "$f" && -s "$f" ]] || continue
+    local tool_name
+    tool_name="$(basename "$f" .jsonl)"
+    extra_args+=(--extra-history "$tool_name=$f")
+  done
+
+  if [[ ${#extra_args[@]} -eq 0 ]]; then
+    log "No history files found on '$name'."
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  local cmd=(
+    python3 "$HEATMAP_SCRIPT"
+    --no-default-sources
+    --export-device "$sync_dir/$name.json"
+    --device-name "$name"
+    "${extra_args[@]}"
+  )
+  for sc in "$tmp_dir"/stats-cache-*.json; do
+    [[ -f "$sc" && -s "$sc" ]] || continue
+    cmd+=(--stats-cache "$sc")
+  done
+  if [[ -n "$TZ_NAME" ]]; then
+    cmd+=(--tz "$TZ_NAME")
+  fi
+
+  "${cmd[@]}"
+  rm -rf "$tmp_dir"
+  return 0
+}
+
+sync_remote_add() {
+  local name="${1:-}" host="${2:-}"
+  [[ -n "$name" ]] || die "Usage: sync remote add <name> <user@host>"
+  [[ -n "$host" ]] || die "Usage: sync remote add <name> <user@host>"
+
+  load_saved_config
+  local remotes="${SAVED_SYNC_REMOTES:-}"
+  local new_entry="$name=$host"
+  if [[ -n "$remotes" ]]; then
+    local updated=""
+    local found=0
+    local IFS=','
+    for entry in $remotes; do
+      IFS=' '
+      local ename="${entry%%=*}"
+      if [[ "$ename" == "$name" ]]; then
+        updated="${updated:+$updated,}$new_entry"
+        found=1
+      else
+        updated="${updated:+$updated,}$entry"
+      fi
+    done
+    if [[ "$found" -eq 0 ]]; then
+      updated="${updated:+$updated,}$new_entry"
+    fi
+    VIBE_SYNC_REMOTES="$updated"
+  else
+    VIBE_SYNC_REMOTES="$new_entry"
+  fi
+  save_config \
+    "${SAVED_PROFILE_REPO}" \
+    "${SAVED_GITHUB_USERNAME}" \
+    "${SAVED_GIT_AUTHOR_NAME}" \
+    "${SAVED_GIT_AUTHOR_EMAIL}" \
+    "${SAVED_AUTH_MODE}"
+  log "Remote '$name' ($host) added."
+}
+
+sync_remote_remove() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "Usage: sync remote remove <name>"
+
+  load_saved_config
+  local remotes="${SAVED_SYNC_REMOTES:-}"
+  if [[ -z "$remotes" ]]; then
+    log "No remotes configured."
+    return 0
+  fi
+  local updated=""
+  local IFS=','
+  for entry in $remotes; do
+    IFS=' '
+    local ename="${entry%%=*}"
+    if [[ "$ename" != "$name" ]]; then
+      updated="${updated:+$updated,}$entry"
+    fi
+  done
+  VIBE_SYNC_REMOTES="$updated"
+  save_config \
+    "${SAVED_PROFILE_REPO}" \
+    "${SAVED_GITHUB_USERNAME}" \
+    "${SAVED_GIT_AUTHOR_NAME}" \
+    "${SAVED_GIT_AUTHOR_EMAIL}" \
+    "${SAVED_AUTH_MODE}"
+  log "Remote '$name' removed."
+}
+
+sync_remote_list() {
+  load_saved_config
+  local remotes="${SAVED_SYNC_REMOTES:-${VIBE_SYNC_REMOTES:-}}"
+  if [[ -z "$remotes" ]]; then
+    printf '[vibe] No remotes configured.\n'
+    return 0
+  fi
+  printf '[vibe] Registered remotes:\n'
+  local IFS=','
+  for entry in $remotes; do
+    IFS=' '
+    local rname="${entry%%=*}"
+    local rhost="${entry#*=}"
+    printf '  %s  →  %s\n' "$rname" "$rhost"
+  done
+}
+
+sync_import() {
+  local file="${1:-}" device_arg=""
+  [[ -n "$file" ]] || die "Usage: sync import <file> [device=<name>]"
+  [[ -f "$file" ]] || die "File not found: $file"
+  shift
+
+  for arg in "$@"; do
+    case "$arg" in
+      device=*) device_arg="${arg#device=}" ;;
+    esac
+  done
+
+  load_saved_config
+  local profile_repo="${SAVED_PROFILE_REPO:-${PROFILE_REPO:-}}"
+  if [[ -z "$profile_repo" ]]; then
+    profile_repo="$(auto_detect_profile_repo || true)"
+  fi
+  [[ -n "$profile_repo" && -d "$profile_repo/.git" ]] || die "Profile repo not configured."
+
+  local sync_dir="$profile_repo/assets/vibe-sync"
+  mkdir -p "$sync_dir"
+
+  if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('v')==1" "$file" 2>/dev/null; then
+    local dev_name="${device_arg:-}"
+    if [[ -z "$dev_name" ]]; then
+      dev_name="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('device','imported'))" "$file" 2>/dev/null)"
+    fi
+    cp "$file" "$sync_dir/${dev_name}.json"
+    log "Imported device export '${dev_name}' to sync directory."
+  else
+    local dev_name="${device_arg:-imported}"
+    python3 "$HEATMAP_SCRIPT" \
+      --no-default-sources \
+      --extra-history "unknown=$file" \
+      --export-device "$sync_dir/${dev_name}.json" \
+      --device-name "$dev_name"
+    log "Converted and imported as device '${dev_name}'."
+  fi
+
+  cd "$profile_repo"
+  git add "assets/vibe-sync/"
+  if ! git diff --cached --quiet; then
+    git commit -m "chore: import device sync data"
+    git push
+    log "Import committed and pushed."
+  fi
+}
+
+sync_status() {
+  load_saved_config
+  local device
+  device="$(resolve_device_name)"
+  printf '[vibe] Device name: %s\n' "$device"
+
+  local profile_repo="${SAVED_PROFILE_REPO:-${PROFILE_REPO:-}}"
+  if [[ -z "$profile_repo" ]]; then
+    profile_repo="$(auto_detect_profile_repo || true)"
+  fi
+  if [[ -n "$profile_repo" && -d "$profile_repo/.git" ]]; then
+    local sync_dir="$profile_repo/assets/vibe-sync"
+    if [[ -d "$sync_dir" ]] && ls "$sync_dir"/*.json &>/dev/null; then
+      printf '[vibe] Sync directory: %s\n' "$sync_dir"
+      for f in "$sync_dir"/*.json; do
+        local fname
+        fname="$(basename "$f" .json)"
+        local size
+        size="$(du -h "$f" 2>/dev/null | cut -f1)"
+        local mtime
+        mtime="$(stat -c '%y' "$f" 2>/dev/null | cut -d. -f1)"
+        if [[ "$fname" == "$device" ]]; then
+          printf '  %s  %s  %s  (this device)\n' "$fname" "$size" "$mtime"
+        else
+          printf '  %s  %s  %s\n' "$fname" "$size" "$mtime"
+        fi
+      done
+    else
+      printf '[vibe] No sync data found.\n'
+    fi
+  else
+    printf '[vibe] Profile repo not configured.\n'
+  fi
+
+  local remotes="${SAVED_SYNC_REMOTES:-${VIBE_SYNC_REMOTES:-}}"
+  if [[ -n "$remotes" ]]; then
+    printf '[vibe] SSH remotes:\n'
+    local IFS=','
+    for entry in $remotes; do
+      IFS=' '
+      local rname="${entry%%=*}"
+      local rhost="${entry#*=}"
+      printf '  %s  →  %s\n' "$rname" "$rhost"
+    done
+  fi
+}
+
 CRON_TAG="# vibetrace-auto"
 
 resolve_auto_schedule() {
@@ -648,6 +987,9 @@ apply_setup_assignment() {
     token_env|token-env|github_token_env|github-token-env)
       SETUP_GITHUB_TOKEN_ENV="$value"
       ;;
+    device|device_name|device-name)
+      VIBE_DEVICE_NAME="$value"
+      ;;
     *)
       die "Unknown setup parameter: $key"
       ;;
@@ -713,6 +1055,8 @@ SETUP_GITHUB_TOKEN_ENV=""
 HEATMAP_HISTORY_GLOB=""
 EXTRA_HISTORY_ARGS=()
 AUTO_ARGS=()
+SYNC_MODE=0
+SYNC_ARGS=()
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -730,6 +1074,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     auto)
       AUTO_MODE=1
+      shift
+      ;;
+    sync)
+      SYNC_MODE=1
       shift
       ;;
     --setup)
@@ -818,6 +1166,9 @@ while [[ "$#" -gt 0 ]]; do
       if [[ "$SETUP_MODE" -eq 1 ]]; then
         apply_setup_assignment "$1"
         shift
+      elif [[ "$SYNC_MODE" -eq 1 ]]; then
+        SYNC_ARGS+=("$1")
+        shift
       else
         PUBLISH_MODE=1
         apply_heatmap_assignment "$1"
@@ -827,6 +1178,9 @@ while [[ "$#" -gt 0 ]]; do
     *)
       if [[ "$AUTO_MODE" -eq 1 ]]; then
         AUTO_ARGS+=("$1")
+        shift
+      elif [[ "$SYNC_MODE" -eq 1 ]]; then
+        SYNC_ARGS+=("$1")
         shift
       else
         die "Unknown option: $1"
@@ -859,6 +1213,45 @@ if [[ "$AUTO_MODE" -eq 1 ]]; then
       ;;
     *)
       auto_enable "$local_auto_sub"
+      ;;
+  esac
+  exit 0
+fi
+
+if [[ "$SYNC_MODE" -eq 1 ]]; then
+  local_sync_sub="${SYNC_ARGS[0]:-status}"
+  case "$local_sync_sub" in
+    push)
+      sync_push
+      ;;
+    pull)
+      sync_pull
+      ;;
+    status|"")
+      sync_status
+      ;;
+    remote)
+      local_remote_action="${SYNC_ARGS[1]:-list}"
+      case "$local_remote_action" in
+        add)
+          sync_remote_add "${SYNC_ARGS[2]:-}" "${SYNC_ARGS[3]:-}"
+          ;;
+        remove|rm)
+          sync_remote_remove "${SYNC_ARGS[2]:-}"
+          ;;
+        list|"")
+          sync_remote_list
+          ;;
+        *)
+          die "Unknown sync remote action: $local_remote_action"
+          ;;
+      esac
+      ;;
+    import)
+      sync_import "${SYNC_ARGS[@]:1}"
+      ;;
+    *)
+      die "Unknown sync action: $local_sync_sub (expected: push, pull, status, remote, import)"
       ;;
   esac
   exit 0
@@ -942,6 +1335,12 @@ done
 
 if [[ -n "$TZ_NAME" ]]; then
   cmd+=(--tz "$TZ_NAME")
+fi
+
+SYNC_DIR="$PROFILE_REPO/assets/vibe-sync"
+if [[ -d "$SYNC_DIR" ]] && ls "$SYNC_DIR"/*.json &>/dev/null; then
+  DEVICE_NAME="$(resolve_device_name)"
+  cmd+=(--import-devices "$SYNC_DIR" --device-name "$DEVICE_NAME")
 fi
 
 log "Generating heatmap and updating README in: $PROFILE_REPO"

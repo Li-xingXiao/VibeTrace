@@ -28,6 +28,14 @@ This skill owns the user-facing `/vibe` interface. Do not ask the user to run sh
 - `/vibe auto enable weekly`: preset — every Monday at 9am.
 - `/vibe auto enable 6h`: preset — every 6 hours.
 - `/vibe auto disable`: remove the auto-publish crontab entry.
+- `/vibe sync push`: export local history data and push to the profile repo for cross-device merge.
+- `/vibe sync pull`: pull latest sync data from the profile repo and SSH remotes.
+- `/vibe sync status`: show device name, synced devices, and registered remotes.
+- `/vibe sync remote add <name> <user@host>`: register an SSH remote server for history pull.
+- `/vibe sync remote remove <name>`: remove a registered SSH remote.
+- `/vibe sync remote list`: list registered SSH remotes.
+- `/vibe sync import <file>`: import a history file or device export into the sync directory.
+- `/vibe set device=<name>`: set this device's name for cross-device sync (default: hostname).
 - `/vibe`: keep as backward-compatible publish behavior, but prefer `/vibe heatmap` in user-facing instructions.
 
 ## Behavior
@@ -50,6 +58,7 @@ Internal command mapping:
 - Publish: run the resolved core script with `heatmap`.
 - Tool-specific publish: run the same script with `heatmap --source <tool-id>`; when the user supplies `history=<path-or-glob>`, pass it through as `history=<path-or-glob>` or `--extra-history <tool-id>=<path-or-glob>`.
 - Auto commands: run the resolved core script with `auto` plus the sub-command (`enable`, `disable`, or `status`) and optional schedule argument. Preset names `daily`, `weekly`, `6h`, `12h` are accepted alongside raw cron expressions.
+- Sync commands: run the resolved core script with `sync` plus the sub-command (`push`, `pull`, `status`, `remote add <name> <host>`, `remote remove <name>`, `remote list`, `import <file> [device=<name>]`). The sync feature uses the profile repo as a sync medium — each device exports to `assets/vibe-sync/<device>.json`, and during heatmap generation all device data is automatically merged.
 
 README safety: never replace an existing profile README wholesale. If the marker block exists, replace only that block. If markers are missing, append the vibe heatmap block to the end. Create a new README only when `README.md` does not exist.
 
