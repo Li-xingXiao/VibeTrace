@@ -206,6 +206,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to Codex history JSONL.",
     )
     parser.add_argument(
+        "--codex-sessions",
+        default="~/.codex/sessions",
+        help="Root directory of Codex session JSONL files used for token usage.",
+    )
+    parser.add_argument(
         "--codefuse-codex-history",
         default="~/.codefuse/engine/codex/history.jsonl",
         help="Path to CodeFuse Codex-engine history JSONL.",
@@ -506,6 +511,13 @@ def format_big_number(n: int) -> str:
     return f"{n:,}"
 
 
+def merge_model_usage(target: Dict[str, Dict[str, int]], incoming: Dict[str, Dict[str, int]]) -> None:
+    for model, usage in incoming.items():
+        existing = target.setdefault(model, {})
+        for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests"):
+            existing[key] = existing.get(key, 0) + int(usage.get(key, 0))
+
+
 def load_stats_caches(paths: Sequence[str]) -> Dict[str, object]:
     merged: Dict[str, object] = {
         "total_messages": 0,
@@ -531,11 +543,7 @@ def load_stats_caches(paths: Sequence[str]) -> Dict[str, object]:
         for entry in data.get("dailyActivity", []):
             merged["total_tool_calls"] = int(merged["total_tool_calls"]) + int(entry.get("toolCallCount", 0))
 
-        for model, usage in data.get("modelUsage", {}).items():
-            existing = merged["model_usage"].get(model, {})
-            for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests"):
-                existing[key] = existing.get(key, 0) + int(usage.get(key, 0))
-            merged["model_usage"][model] = existing
+        merge_model_usage(merged["model_usage"], data.get("modelUsage", {}))
 
         for hour, count in data.get("hourCounts", {}).items():
             merged["hour_counts"][int(hour)] += int(count)
@@ -728,7 +736,7 @@ def load_codex_events(path: Path, tz, source: str = "codex") -> List[Event]:
     if not path.exists():
         return events
 
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
         for line in handle:
             line = line.strip()
             if not line:
@@ -745,6 +753,43 @@ def load_codex_events(path: Path, tz, source: str = "codex") -> List[Event]:
             session_id = str(payload.get("session_id") or payload.get("sessionId") or "unknown")
             events.append(Event(source=source, ts=to_datetime(ts_raw, tz), session_key=f"{source}:{session_id}"))
     return events
+
+
+def load_codex_session_token_usage(root: Path, year: int) -> Dict[str, Dict[str, int]]:
+    model_usage: Dict[str, Dict[str, int]] = {}
+    session_root = root / str(year)
+    if not session_root.is_dir():
+        return model_usage
+
+    # ponytail: scans current-year sessions on each run; add an mtime cache only if this becomes slow.
+    for path in session_root.rglob("*.jsonl"):
+        model = ""
+        try:
+            with path.open("rb") as handle:
+                for raw_line in handle:
+                    if b'"model"' not in raw_line and b'"last_token_usage"' not in raw_line:
+                        continue
+                    try:
+                        payload = json.loads(raw_line).get("payload", {})
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    if isinstance(payload.get("model"), str):
+                        model = payload["model"]
+                    usage = payload.get("info", {}).get("last_token_usage", {})
+                    if not model or not isinstance(usage, dict):
+                        continue
+                    cached = int(usage.get("cached_input_tokens", 0) or 0)
+                    cache_write = int(usage.get("cache_write_input_tokens", 0) or 0)
+                    entry = model_usage.setdefault(model, defaultdict(int))
+                    entry["inputTokens"] += max(0, int(usage.get("input_tokens", 0) or 0) - cached - cache_write)
+                    entry["outputTokens"] += int(usage.get("output_tokens", 0) or 0)
+                    entry["cacheReadInputTokens"] += cached
+                    entry["cacheCreationInputTokens"] += cache_write
+        except OSError:
+            continue
+    return model_usage
 
 
 def load_claude_events(path: Path, tz, source: str = "claude") -> List[Event]:
@@ -2129,6 +2174,11 @@ def main() -> int:
             "model_usage": {}, "hour_counts": defaultdict(int),
             "longest_session_ms": 0, "longest_session_messages": 0,
         }
+        if not args.no_default_sources:
+            merge_model_usage(
+                sd["model_usage"],
+                load_codex_session_token_usage(Path(os.path.expanduser(args.codex_sessions)), args.year),
+            )
         payload = export_device_data(
             events, sd,
             year=args.year,
@@ -2213,6 +2263,11 @@ def main() -> int:
         "~/.codefuse/engine/cc/stats-cache.json",
     ]
     stats_data = load_stats_caches(stats_cache_paths)
+    if not args.no_default_sources:
+        merge_model_usage(
+            stats_data["model_usage"],
+            load_codex_session_token_usage(Path(os.path.expanduser(args.codex_sessions)), args.year),
+        )
 
     import_dir = args.import_devices.strip()
     if import_dir:
