@@ -1372,7 +1372,9 @@ def render_token_stats_svg(
 ) -> str:
     rows: List[Dict[str, object]] = []
     for model, usage in model_usage.items():
-        total = usage.get("inputTokens", 0) + usage.get("outputTokens", 0)
+        total = sum(usage.get(key, 0) for key in (
+            "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens",
+        ))
         rows.append({
             "model": model,
             "label": model_label(model),

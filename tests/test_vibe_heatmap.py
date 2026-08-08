@@ -15,6 +15,19 @@ SPEC.loader.exec_module(VIBE)
 
 
 class CodexTokenUsageTest(unittest.TestCase):
+    def test_token_card_includes_cached_tokens_in_model_totals(self):
+        svg = VIBE.render_token_stats_svg(
+            title="Token Economy", subtitle="107 tokens",
+            model_usage={"gpt-5.6-terra": {
+                "inputTokens": 30, "outputTokens": 7,
+                "cacheReadInputTokens": 60, "cacheCreationInputTokens": 10,
+            }},
+            cache_hit_pct=60.0, total_input=30, total_output=7, clip_id="test",
+        )
+
+        self.assertIn("Gpt 5.6 Terra — 107", svg)
+        self.assertIn("Total: 107 tokens", svg)
+
     def test_ignores_invalid_utf8_in_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             history = Path(temp_dir) / "history.jsonl"
